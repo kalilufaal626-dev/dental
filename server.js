@@ -105,8 +105,7 @@ function requireStaff(req, res, next) {
 // HEALTH CHECK  (Railway / Render ping this)
 // =====================================================================
 app.get('/health', (req, res) => ok(res, { status: 'ok' }));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
+app.get('/', (req, res) => ok(res, { name: 'DentCare Pro API', status: 'live' }));
 // =====================================================================
 // AUTH
 // =====================================================================
