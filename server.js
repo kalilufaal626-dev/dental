@@ -157,6 +157,63 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+app.post('/auth/patient-register', async (req, res) => {
+  try {
+    const { patient_id, email, password, phone } = req.body || {};
+
+    if (!patient_id || !email || !password) {
+      return fail(res, 400, 'Patient ID, email and password are required');
+    }
+
+    const { data: patient, error: patientErr } = await supabase
+      .from('patients')
+      .select('id, patient_id, full_name, phone')
+      .eq('patient_id', patient_id.trim())
+      .maybeSingle();
+
+    if (patientErr) throw patientErr;
+
+    if (!patient) {
+      return fail(res, 404, 'Patient ID not found. Please contact the clinic.');
+    }
+
+    const { data: existing } = await supabase
+      .from('patient_accounts')
+      .select('id')
+      .eq('patient_id', patient.id)
+      .maybeSingle();
+
+    if (existing) {
+      return fail(res, 409, 'This patient already has an account.');
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    const { data, error } = await supabase
+      .from('patient_accounts')
+      .insert({
+        patient_id: patient.id,
+        full_name: patient.full_name,
+        email: email.trim(),
+        password: hashed,
+        phone: phone || patient.phone || null
+      })
+      .select('id, patient_id, full_name, email, phone, created_at')
+      .single();
+
+    if (error) throw error;
+
+    return ok(res, {
+      message: 'Patient account created successfully',
+      account: data
+    }, 201);
+
+  } catch (e) {
+    console.error(e);
+    return fail(res, 500, 'Could not create patient account. Email may already be in use.');
+  }
+});
+
 // Everything below requires a valid token
 app.use(authenticate);
 
