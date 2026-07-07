@@ -911,7 +911,65 @@ app.get('/audit-logs', requireRole('admin'), async (req, res) => {
     return fail(res, 500, 'Could not load audit logs');
   }
 });
+// =====================================================================
+// REPORTS
+// =====================================================================
+app.get('/reports/referral/:patientId', requireStaff, async (req, res) => {
+  try {
+    const patientId = req.params.patientId;
 
+    const { data: patient, error: patientErr } = await supabase
+      .from('patients')
+      .select('*')
+      .eq('id', patientId)
+      .single();
+    if (patientErr) throw patientErr;
+
+    const { data: records, error: recordsErr } = await supabase
+      .from('medical_records')
+      .select('*')
+      .eq('patient_id', patientId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (recordsErr) throw recordsErr;
+
+    const { data: chart, error: chartErr } = await supabase
+      .from('dental_chart')
+      .select('*')
+      .eq('patient_id', patientId);
+    if (chartErr) throw chartErr;
+
+    const { data: prescriptions, error: rxErr } = await supabase
+      .from('prescriptions')
+      .select('*')
+      .eq('patient_id', patientId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (rxErr) throw rxErr;
+
+    const sMap = await staffMap();
+    const latestVisit = records?.[0] || null;
+
+    return ok(res, {
+      patient,
+      latestVisit: latestVisit
+        ? {
+            ...latestVisit,
+            doctor_name: sMap[latestVisit.doctor_id]?.full_name || null
+          }
+        : null,
+      dentalChart: chart || [],
+      prescriptions: (prescriptions || []).map(p => ({
+        ...p,
+        doctor_name: sMap[p.doctor_id]?.full_name || null
+      })),
+      generatedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error(e);
+    return fail(res, 500, 'Could not generate referral report');
+  }
+});
 // =====================================================================
 // 404 + error fallback
 // =====================================================================
