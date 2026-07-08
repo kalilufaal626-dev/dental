@@ -93,8 +93,7 @@ function requireRole(...roles) {
 }
 
 // Any logged-in staff member (i.e. not the patient portal)
-const STAFF_ROLES = ['admin', 'dentist', 'receptionist', 'pharmacist', 'nurse'];
-function requireStaff(req, res, next) {
+const STAFF_ROLES = ['admin', 'dentist', 'receptionist', 'pharmacist', 'assistant'];function requireStaff(req, res, next) {
   if (!req.user || !STAFF_ROLES.includes(req.user.role)) {
     return fail(res, 403, 'Staff access only');
   }
