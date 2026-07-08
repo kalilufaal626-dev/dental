@@ -212,7 +212,23 @@ app.post('/auth/patient-register', async (req, res) => {
     return fail(res, 500, 'Could not create patient account. Email may already be in use.');
   }
 });
+// Public dentist list for patient appointment booking
+app.get('/dentists', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('staff')
+      .select('id, full_name, specialization')
+      .eq('role', 'dentist')
+      .order('full_name', { ascending: true });
 
+    if (error) throw error;
+
+    return ok(res, data || []);
+  } catch (e) {
+    console.error(e);
+    return fail(res, 500, 'Could not load dentists');
+  }
+});
 // Everything below requires a valid token
 app.use(authenticate);
 
