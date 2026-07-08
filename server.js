@@ -262,7 +262,17 @@ app.get('/stats', requireRole('admin'), async (req, res) => {
     return fail(res, 500, 'Could not load stats');
   }
 });
+# in your dental-dashboard clone
+# replace indext.html with the one I sent, then:
+git add indext.html
+git commit -m "Fix reports page bug, wire referral letter, fix nurse role naming"
+git push
 
+# in your dental clone
+# paste the /doctors route into server.js, then:
+git add server.js
+git commit -m "Add GET /doctors endpoint for patient booking"
+git push
 // =====================================================================
 // APPOINTMENTS
 // =====================================================================
