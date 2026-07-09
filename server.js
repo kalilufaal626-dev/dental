@@ -281,31 +281,35 @@ app.get('/stats', requireRole('admin'), async (req, res) => {
 // =====================================================================
 // APPOINTMENTS
 // =====================================================================
-app.get('/appointments', async (req, res) => {
+app.patch('/appointments/:id', requireRole('admin', 'dentist', 'receptionist'), async (req, res) => {
   try {
-    let query = supabase.from('appointments').select('*').order('date', { ascending: true }).order('time', { ascending: true });
+    const b = req.body || {};
+    const update = {};
 
-    if (req.user.role === 'patient') {
-      query = query.eq('patient_id', req.user.patient_id);
-    } else if (req.query.patient_id) {
-      query = query.eq('patient_id', req.query.patient_id);
+    if (b.status !== undefined) update.status = b.status;
+    if (b.patient_id !== undefined) update.patient_id = b.patient_id;
+    if (b.doctor_id !== undefined) update.doctor_id = b.doctor_id;
+    if (b.date !== undefined) update.date = b.date;
+    if (b.time !== undefined) update.time = b.time;
+    if (b.treatment !== undefined) update.treatment = b.treatment;
+    if (b.notes !== undefined) update.notes = b.notes;
+
+    if (Object.keys(update).length === 0) {
+      return fail(res, 400, 'No appointment fields provided');
     }
-    if (req.query.date) query = query.eq('date', req.query.date);
-    if (req.query.status) query = query.eq('status', req.query.status);
 
-    const { data, error } = await query;
+    const { data, error } = await supabase
+      .from('appointments')
+      .update(update)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
     if (error) throw error;
-
-    const [pMap, sMap] = await Promise.all([patientMap(), staffMap()]);
-    const rows = data.map(a => ({
-      ...a,
-      patient_name: pMap[a.patient_id]?.full_name || null,
-      doctor_name: sMap[a.doctor_id]?.full_name || null,
-    }));
-    return ok(res, rows);
+    return ok(res, data);
   } catch (e) {
     console.error(e);
-    return fail(res, 500, 'Could not load appointments');
+    return fail(res, 500, 'Could not update appointment');
   }
 });
 
