@@ -281,6 +281,40 @@ app.get('/stats', requireRole('admin'), async (req, res) => {
 // =====================================================================
 // APPOINTMENTS
 // =====================================================================
+app.get('/appointments', async (req, res) => {
+  try {
+    let query = supabase
+      .from('appointments')
+      .select('*')
+      .order('date', { ascending: true })
+      .order('time', { ascending: true });
+
+    if (req.user.role === 'patient') {
+      query = query.eq('patient_id', req.user.patient_id);
+    } else if (req.query.patient_id) {
+      query = query.eq('patient_id', req.query.patient_id);
+    }
+
+    if (req.query.date) query = query.eq('date', req.query.date);
+    if (req.query.status) query = query.eq('status', req.query.status);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const [pMap, sMap] = await Promise.all([patientMap(), staffMap()]);
+
+    const rows = (data || []).map(a => ({
+      ...a,
+      patient_name: pMap[a.patient_id]?.full_name || null,
+      doctor_name: sMap[a.doctor_id]?.full_name || null,
+    }));
+
+    return ok(res, rows);
+  } catch (e) {
+    console.error(e);
+    return fail(res, 500, 'Could not load appointments');
+  }
+});
 app.patch('/appointments/:id', requireRole('admin', 'dentist', 'receptionist'), async (req, res) => {
   try {
     const b = req.body || {};
