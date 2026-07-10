@@ -9,6 +9,8 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { createClient } = require('@supabase/supabase-js');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 
 const {
   SUPABASE_URL,
@@ -31,8 +33,47 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// Render (and most PaaS platforms) sit behind a reverse proxy. Without this,
+// req.ip is the proxy's IP for every request, which breaks per-IP rate
+// limiting (everyone would share one bucket) and any IP-based logging.
+app.set('trust proxy', 1);
+
+app.use(helmet());
+
+// CORS origin is configurable via env so you can lock this down to your
+// real frontend domain(s) once you have one, without a code change:
+//   CORS_ORIGIN=https://your-frontend.com,https://your-other-domain.com
+// Leave CORS_ORIGIN unset during development to allow any origin.
+const corsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+app.use(cors(corsOrigins.length ? { origin: corsOrigins } : {}));
+
+// Limits brute-force attempts against login/registration: 10 tries per
+// IP per 15 minutes. Tune as needed once you see real traffic patterns.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again later.' },
+});
+
+// General ceiling on the rest of the API so no single IP can hammer the
+// server or your Supabase usage quota. Generous enough for normal clinic
+// use; tighten later if you see abuse.
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+});
+app.use(apiLimiter);
+
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------------------------------------------------------------------
@@ -93,11 +134,22 @@ function requireRole(...roles) {
 }
 
 // Any logged-in staff member (i.e. not the patient portal)
-const STAFF_ROLES = ['admin', 'dentist', 'receptionist', 'pharmacist', 'assistant'];function requireStaff(req, res, next) {
+const STAFF_ROLES = ['admin', 'dentist', 'receptionist', 'pharmacist', 'assistant'];
+function requireStaff(req, res, next) {
   if (!req.user || !STAFF_ROLES.includes(req.user.role)) {
     return fail(res, 403, 'Staff access only');
   }
   next();
+}
+
+// Allows any staff role OR a patient viewing/listing only their own data.
+// Use this on list routes (appointments, prescriptions, invoices) where the
+// handler itself filters by patient_id when req.user.role === 'patient'.
+function requireStaffOrOwnPatient(req, res, next) {
+  if (!req.user) return fail(res, 401, 'Missing token');
+  if (req.user.role === 'patient') return next();
+  if (STAFF_ROLES.includes(req.user.role)) return next();
+  return fail(res, 403, 'Not allowed');
 }
 
 // =====================================================================
@@ -108,7 +160,7 @@ app.get('/', (req, res) => ok(res, { name: 'DentCare Pro API', status: 'live' })
 // =====================================================================
 // AUTH
 // =====================================================================
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) return fail(res, 400, 'Email and password are required');
@@ -156,7 +208,7 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-app.post('/auth/patient-register', async (req, res) => {
+app.post('/auth/patient-register', authLimiter, async (req, res) => {
   try {
     const { patient_id, email, password, phone } = req.body || {};
 
@@ -281,7 +333,7 @@ app.get('/stats', requireRole('admin'), async (req, res) => {
 // =====================================================================
 // APPOINTMENTS
 // =====================================================================
-app.get('/appointments', async (req, res) => {
+app.get('/appointments', requireStaffOrOwnPatient, async (req, res) => {
   try {
     let query = supabase
       .from('appointments')
@@ -373,20 +425,6 @@ app.post('/appointments', requireRole('admin', 'dentist', 'receptionist', 'patie
   }
 });
 
-app.patch('/appointments/:id', requireRole('admin', 'dentist', 'receptionist'), async (req, res) => {
-  try {
-    const { status } = req.body || {};
-    if (!status) return fail(res, 400, 'status is required');
-    const { data, error } = await supabase
-      .from('appointments').update({ status }).eq('id', req.params.id).select().single();
-    if (error) throw error;
-    return ok(res, data);
-  } catch (e) {
-    console.error(e);
-    return fail(res, 500, 'Could not update appointment');
-  }
-});
-
 // =====================================================================
 // PATIENTS
 // =====================================================================
@@ -394,7 +432,17 @@ app.get('/patients', requireStaff, async (req, res) => {
   try {
     let query = supabase.from('patients').select('*').order('created_at', { ascending: false });
     if (req.query.search) {
-      const s = req.query.search;
+      // PostgREST's .or() filter treats a raw string as its own mini query
+      // language, where `,` separates conditions and `(` `)` group them.
+      // Escaping those (per PostgREST's own escaping rules: backslash-escape
+      // commas, parens, and backslashes) prevents a search term from
+      // injecting extra filter clauses.
+      const s = String(req.query.search)
+        .slice(0, 100)
+        .replace(/\\/g, '\\\\')
+        .replace(/,/g, '\\,')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)');
       query = query.or(`full_name.ilike.%${s}%,patient_id.ilike.%${s}%,phone.ilike.%${s}%`);
     }
     const { data, error } = await query;
@@ -431,7 +479,7 @@ app.post('/patients', requireRole('admin', 'dentist', 'receptionist'), async (re
   }
 });
 
-app.get('/patients/:id', async (req, res) => {
+app.get('/patients/:id', requireStaffOrOwnPatient, async (req, res) => {
   try {
     const id = req.params.id;
     if (req.user.role === 'patient' && String(req.user.patient_id) !== String(id)) {
@@ -516,7 +564,7 @@ app.get('/patients/:id/records', async (req, res) => {
   }
 });
 
-app.post('/patients/:id/records', requireRole('admin', 'dentist', 'nurse'), async (req, res) => {
+app.post('/patients/:id/records', requireRole('admin', 'dentist', 'assistant'), async (req, res) => {
   try {
     const b = req.body || {};
     const insert = {
@@ -581,7 +629,7 @@ app.post('/patients/:id/xrays', requireRole('admin', 'dentist'), async (req, res
 // =====================================================================
 // PRESCRIPTIONS
 // =====================================================================
-app.get('/prescriptions', async (req, res) => {
+app.get('/prescriptions', requireStaffOrOwnPatient, async (req, res) => {
   try {
     let query = supabase.from('prescriptions').select('*').order('created_at', { ascending: false });
     if (req.user.role === 'patient') {
@@ -708,7 +756,7 @@ app.patch('/drugs/:id', requireRole('admin', 'pharmacist'), async (req, res) => 
 // =====================================================================
 // INVOICES / BILLING
 // =====================================================================
-app.get('/invoices', async (req, res) => {
+app.get('/invoices', requireStaffOrOwnPatient, async (req, res) => {
   try {
     let query = supabase.from('invoices').select('*').order('created_at', { ascending: false });
     if (req.user.role === 'patient') {
@@ -769,7 +817,7 @@ app.post('/invoices', requireRole('admin', 'receptionist'), async (req, res) => 
   }
 });
 
-app.get('/invoices/:id/items', async (req, res) => {
+app.get('/invoices/:id/items', requireStaffOrOwnPatient, async (req, res) => {
   try {
     const { data: invoice, error: invErr } = await supabase
       .from('invoices').select('patient_id').eq('id', req.params.id).single();
@@ -1027,6 +1075,18 @@ app.get('/reports/referral/:patientId', requireStaff, async (req, res) => {
 // 404 + error fallback
 // =====================================================================
 app.use((req, res) => fail(res, 404, 'Not found'));
+
+// Safety net: catches malformed JSON bodies (express.json() throws a
+// SyntaxError for those) and any other error that slips past a route's own
+// try/catch, so the client always gets a clean JSON error instead of
+// Express's default HTML error page (which can leak stack traces).
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  if (err.type === 'entity.parse.failed') {
+    return fail(res, 400, 'Malformed JSON in request body');
+  }
+  return fail(res, 500, 'Something went wrong');
+});
 
 const port = PORT || 3000;
 app.listen(port, () => console.log(`DentCare Pro API listening on port ${port}`));
