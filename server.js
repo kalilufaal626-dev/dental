@@ -564,30 +564,54 @@ app.get('/patients/:id/records', async (req, res) => {
   }
 });
 
-app.post('/patients/:id/records', requireRole('admin', 'dentist', 'assistant'), async (req, res) => {
-  try {
-    const b = req.body || {};
-    const insert = {
-      patient_id: req.params.id,
-      doctor_id: req.user.id,
-      diagnosis: b.diagnosis || null,
-      treatment_done: b.treatment_done || null,
-      treatment_plan: b.treatment_plan || null,
-      notes: b.notes || null,
-      bp: b.bp || null,
-      temperature: b.temperature || null,
-      pulse: b.pulse || null,
-      weight: b.weight || null,
-      oxygen: b.oxygen || null,
-    };
-    const { data, error } = await supabase.from('medical_records').insert(insert).select().single();
-    if (error) throw error;
-    return ok(res, data, 201);
-  } catch (e) {
-    console.error(e);
-    return fail(res, 500, 'Could not save record');
+app.post(
+  '/patients/:id/records',
+  requireRole('admin', 'dentist', 'assistant'),
+  async (req, res) => {
+    try {
+      const b = req.body || {};
+
+      const insert = {
+        patient_id: Number(req.params.id),
+        doctor_id: req.user.id,
+        appointment_id: b.appointment_id || null,
+
+        treatment_plan_id: b.treatment_plan_id || null,
+        diagnosis: b.diagnosis || null,
+        treatment_done: b.treatment_done || null,
+        treatment_plan: b.treatment_plan || null,
+
+        tooth_number: b.tooth_number || null,
+        procedure: b.procedure || null,
+        anaesthetic_used: b.anaesthetic_used || null,
+
+        notes: b.notes || null,
+        bp: b.bp || null,
+        temperature: b.temperature || null,
+        pulse: b.pulse || null,
+        weight: b.weight || null,
+        oxygen: b.oxygen || null,
+
+        next_visit: b.next_visit || null,
+        visit_status: b.visit_status || 'in_progress',
+        updated_at: new Date().toISOString()
+      };
+
+      const { data, error } = await supabase
+        .from('medical_records')
+        .insert(insert)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return ok(res, data, 201);
+    } catch (e) {
+      console.error(e);
+      return fail(res, 500, 'Could not save record');
+    }
   }
-});
+);
 
 // --- X-rays / lab results ----------------------------------------------
 app.get('/patients/:id/xrays', async (req, res) => {
