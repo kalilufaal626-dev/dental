@@ -612,7 +612,48 @@ app.post(
     }
   }
 );
+app.patch(
+  '/patients/:patientId/records/:recordId',
+  requireRole('admin', 'dentist', 'assistant'),
+  async (req, res) => {
+    try {
+      const b = req.body || {};
+      const update = {};
 
+      if (b.diagnosis !== undefined) update.diagnosis = b.diagnosis;
+      if (b.treatment_done !== undefined) update.treatment_done = b.treatment_done;
+      if (b.treatment_plan !== undefined) update.treatment_plan = b.treatment_plan;
+      if (b.tooth_number !== undefined) update.tooth_number = b.tooth_number;
+      if (b.procedure !== undefined) update.procedure = b.procedure;
+      if (b.anaesthetic_used !== undefined) update.anaesthetic_used = b.anaesthetic_used;
+      if (b.bp !== undefined) update.bp = b.bp;
+      if (b.temperature !== undefined) update.temperature = b.temperature;
+      if (b.pulse !== undefined) update.pulse = b.pulse;
+      if (b.weight !== undefined) update.weight = b.weight;
+      if (b.oxygen !== undefined) update.oxygen = b.oxygen;
+      if (b.notes !== undefined) update.notes = b.notes;
+      if (b.next_visit !== undefined) update.next_visit = b.next_visit;
+      if (b.visit_status !== undefined) update.visit_status = b.visit_status;
+
+      update.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase
+        .from('medical_records')
+        .update(update)
+        .eq('id', req.params.recordId)
+        .eq('patient_id', req.params.patientId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return ok(res, data);
+    } catch (error) {
+      console.error(error);
+      return fail(res, 500, 'Could not update medical record');
+    }
+  }
+);
 // --- X-rays / lab results ----------------------------------------------
 app.get('/patients/:id/xrays', async (req, res) => {
   try {
