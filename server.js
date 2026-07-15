@@ -343,6 +343,8 @@ app.get('/appointments', requireStaffOrOwnPatient, async (req, res) => {
 
     if (req.user.role === 'patient') {
       query = query.eq('patient_id', req.user.patient_id);
+    } else if (req.user.role === 'dentist') {
+      query = query.eq('doctor_id', req.user.id);
     } else if (req.query.patient_id) {
       query = query.eq('patient_id', req.query.patient_id);
     }
@@ -371,6 +373,19 @@ app.patch('/appointments/:id', requireRole('admin', 'dentist', 'receptionist'), 
   try {
     const b = req.body || {};
     const update = {};
+
+    if (req.user.role === 'dentist') {
+      const { data: existing, error: findErr } = await supabase
+        .from('appointments')
+        .select('doctor_id')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (findErr) throw findErr;
+      if (!existing) return fail(res, 404, 'Appointment not found');
+      if (String(existing.doctor_id) !== String(req.user.id)) {
+        return fail(res, 403, 'You can only update your own appointments');
+      }
+    }
 
     if (b.status !== undefined) update.status = b.status;
     if (b.patient_id !== undefined) update.patient_id = b.patient_id;
